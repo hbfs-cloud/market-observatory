@@ -15,6 +15,7 @@ import yaml
 from cache_common import put_immutable, real_directory, writer_lock
 from incremental_collector import Collector, fetch_chart, load_universe, utc_seconds
 from object_archive import Archive
+from producer_checkpoint import restore_from_archive
 from release_transport import GitHub, Transport
 from vendor.immutable_cache_release import canonical_bytes, need, Refusal, sha256_bytes
 
@@ -68,12 +69,7 @@ def run_once(config, work, run_id, universe, since, until, intervals, key_file, 
         has_checkpoint = parent and "root/_producer/checkpoint.json" in archive.catalog(previous)["files"]
         if has_checkpoint and fresh:
             checkpoint_root = run / "parent-checkpoint"
-            if checkpoint_root.exists():
-                from vendor.immutable_cache_release import verify_directory
-                verify_directory(checkpoint_root / ".marketdata-receipt/snapshot.json", checkpoint_root)
-            else:
-                archive.restore(previous, checkpoint_root, work / "client-cache", paths=["root/_producer/checkpoint.json"])
-            collector.restore_checkpoint(checkpoint_root / "root/_producer/checkpoint.json")
+            restore_from_archive(collector, archive, previous, checkpoint_root, work / "client-cache")
         with closing(collector.connect()) as db, db:
             if previous:
                 db.execute("INSERT OR IGNORE INTO meta VALUES ('archive_parent',?)", (previous,))
@@ -92,7 +88,9 @@ def run_once(config, work, run_id, universe, since, until, intervals, key_file, 
                     collector.import_observations(inventory)
                 for interval in sorted(intent["intervals"], key=lambda i: config["collector"]["window_seconds"][i]):
                     step = config["collector"]["window_seconds"][interval]
-                    stop = min(until, int(clock()) - config["collector"]["publication_lag_seconds"]) // step * step
+                    duration = config["collector"].get("bar_seconds", {}).get(interval, 0)
+                    stop = (min(until, int(clock()) - config["collector"]["publication_lag_seconds"])
+                            - duration) // step * step
                     start = since // step * step
                     span = config["collector"]["max_windows_per_plan"] * step
                     budget = config["collector"]["plan_jobs_by_interval"][interval]
@@ -132,7 +130,7 @@ def main():
     parser.add_argument("--universe", required=True, type=Path)
     parser.add_argument("--since", required=True)
     parser.add_argument("--until", required=True)
-    parser.add_argument("--interval", action="append", choices=("1d", "1m"), required=True)
+    parser.add_argument("--interval", action="append", choices=("1d", "1m", "15m", "1h"), required=True)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--bootstrap", action="store_true", help="Explicit first run; never falls back after a remote error")
     source.add_argument("--parent", type=Path, help="Pinned resolve receipt with tag and ready_pin")

@@ -9,6 +9,24 @@ datasets:
     markets: [US, EU, AP, ETF, FX, crypto, index, futures_reference]
     provenance: provider_current_non_pit
     required: [instrument_id, timestamp, observed_at, source, adjustment_basis, currency, volume_unit]
+    accumulation_start: '2026-09-15T00:00:00+02:00'
+    historical_intraday_backfill: false
+  bars_15m:
+    adapter: incremental_collector
+    status: implemented_manual_not_runner_benchmarked
+    target_cadence_seconds: 3600
+    accumulation_start: '2026-09-15T00:00:00+02:00'
+    historical_intraday_backfill: false
+    provenance: provider_current_non_pit
+    required: [instrument_id, timestamp, observed_at, source, adjustment_basis, currency, volume_unit]
+  bars_1h:
+    adapter: incremental_collector
+    status: implemented_manual_not_runner_benchmarked
+    target_cadence_seconds: 3600
+    accumulation_start: '2026-09-15T00:00:00+02:00'
+    historical_intraday_backfill: false
+    provenance: provider_current_non_pit
+    required: [instrument_id, timestamp, observed_at, source, adjustment_basis, currency, volume_unit]
   bars_1d:
     adapter: incremental_collector
     status: implemented_manual_not_runner_benchmarked

@@ -1,0 +1,47 @@
+schema_version: 1
+automatic_scheduling: false
+universe: universes/global-20260915.csv
+universe_inventory: universes/global-20260915.inventory.json
+daily_start: '1970-01-01T00:00:00Z'
+intraday_start: '2026-09-15T00:00:00+02:00'
+intraday_intervals: [1m, 15m, 1h]
+max_run_seconds: 10800
+minimum_free_bytes: 8589934592
+collector:
+  price_contract: quote_actions_v2
+  concurrency: 30
+  max_jobs_per_run: 1000
+  max_windows_per_plan: 50000
+  timeout_seconds: 30
+  response_max_bytes: 33554432
+  max_attempts: 5
+  retry_base_seconds: 30
+  retry_max_seconds: 3600
+  publication_lag_seconds: 1200
+  include_prepost: false
+  checkpoint_export_layout: interval_jsonl_batches
+  checkpoint_shard_bytes: 2097152
+  checkpoint_total_bytes: 536870912
+  recent_revisions:
+    1d: {lookback_seconds: 1209600, cadence_seconds: 86400}
+    1m: {lookback_seconds: 7200, cadence_seconds: 3600}
+    15m: {lookback_seconds: 7200, cadence_seconds: 3600}
+    1h: {lookback_seconds: 7200, cadence_seconds: 3600}
+  window_seconds:
+    1d: 86400
+    1m: 3600
+    15m: 3600
+    1h: 3600
+  bar_seconds:
+    1m: 60
+    15m: 900
+    1h: 3600
+  request_windows:
+    1d: 50000
+    1m: 24
+    15m: 24
+    1h: 24
+archive:
+  pack_bytes: 8388608
+  compression_level: 9
+  key_file: ~/.mkdata_key

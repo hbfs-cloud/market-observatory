@@ -24,10 +24,60 @@ d'instruments non traduits sont exclus avec un rapport explicite. L'univers
 `universes/global-20260915.csv` contient 64 986 symboles mappes ; son inventaire
 conserve 1 221 exclusions non resolues et 17 alias dedupliques.
 
+Le profil global planifie tous ces symboles en daily, 1m, 15m et 1h. L'intraday
+commence au **15 septembre 2026 a 00:00, Europe/Paris**, sans backfill anterieur.
+Cette ancre reste fixe : reutiliser le meme `--work` et avancer `--until` ajoute
+les fenetres manquantes. Une relecture versionnee des deux dernieres heures
+(14jours en daily) capte les corrections recentes selon la cadence configuree.
+Le daily conserve son historique depuis1970.
+Les trois resolutions ont des registres distincts ; les bougies non closes sont
+differees, y compris les bougies horaires decalees selon les sessions.
+
+```sh
+python scripts/collect_global.py --config config/global-backfill.yaml \
+  --work state/global --until 2026-09-15T16:00:00Z --execute
+```
+
+Sans `--execute`, cette commande planifie seulement. `--max-batches 1` borne un
+test reseau sans retirer les autres symboles de la file. Un resultat partiel ne
+prouve pas une couverture complete. Ce CLI collecte seulement ; le pipeline
+ci-dessous ajoute l'export ferme et la publication du registre global.
+Le profil global conserve les cotations source sans ajustement client des
+dividendes. La serie daily reconstruite avant splits porte explicitement le
+label `as_traded_reconstructed`, pas celui de brut fournisseur certifie.
+
+```sh
+python scripts/global_archive_pipeline.py --config config/global-backfill.yaml \
+  --transport-config config/transport.yaml --work state/global \
+  --run-id passage-001 --until 2026-09-15T16:00:00Z \
+  --parent /absolute/path/published.json --max-batches 1 --execute --publish
+```
+
+Chaque nouveau passage a un `--run-id` distinct et prend le recu publie du
+passage precedent comme parent. Conserver le meme `--work`. Pour reprendre
+un passage interrompu, reutiliser exactement son ID, sa configuration et ses
+arguments : l'intent, le lot ferme et la preparation deja durable sont reutilises.
+Sans `--publish`, le lot reste prepare localement et doit etre publie avant de
+commencer le suivant. `--bootstrap` remplace le parent uniquement pour une
+premiere archive. Aucun de ces modes n'active de scheduling.
+
+L'export global n'ajoute que les nouveaux lots observes ; les lots fermes ne
+sont pas reconstruits a chaque passage. Les checkpoints v2 utilisent un petit
+index et des fragments gzip content-addresses, bornes par la configuration.
+Une reprise restaure seulement cet index et ses fragments, dans une transaction
+locale unique ; un fragment absent ou corrompu refuse toute la restauration.
+Le pin et la selection sont recontroles si la destination existe deja. Les
+checkpoints v1 restent lisibles par le nouveau client ; un ancien client v1 ne
+peut pas reprendre un checkpoint v2. Les anciennes releases restent intactes.
+Une relecture bornee ne garantit ni toutes les revisions anciennes, ni la
+completude des sessions ; ces deux qualifications restent distinctes.
+
+Pour une fenetre explicite et un univers valide :
+
 ```sh
 python scripts/incremental_collector.py --config config/manual.yaml --store state/collector \
   collect --universe /absolute/path/validated-universe.csv \
-  --start 2026-09-14T12:00:00Z --end 2026-09-14T13:00:00Z --interval 1m
+  --start 2026-09-15T12:00:00Z --end 2026-09-15T13:00:00Z --interval 1m
 ```
 
 Cette commande planifie seulement. `--execute` autorise les appels reseau de ce

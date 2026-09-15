@@ -26,6 +26,8 @@ import urllib.request
 import yaml
 
 from cache_common import checked_blob, publish_directory, put_immutable, real_directory, writer_lock
+from price_contract import CONTRACT, quote_view
+from producer_checkpoint import read_index, read_values, write_checkpoint
 from vendor.immutable_cache_release import (
     Refusal, canonical_bytes, inventory_from_roots, need, portable_parts,
     portable_snapshot, sha256_bytes, sha256_file, source_path,
@@ -76,7 +78,7 @@ def validate_payload(payload: dict, request: dict) -> int:
         for i, t in enumerate(timestamps):
             if not request["start"] <= t < request["end"]:
                 continue
-            need(request["interval"] != "1m" or t % 60 == 0, "unaligned minute")
+            need(request["interval"] == "1d" or t % 60 == 0, "unaligned intraday timestamp")
             values = [quote[k][i] for k in ("open", "high", "low", "close", "volume")]
             # Empty provider buckets are missing observations, never synthetic
             # zero-volume bars. A partially populated bucket is still invalid.
@@ -92,15 +94,22 @@ def validate_payload(payload: dict, request: dict) -> int:
 
 
 def fetch_chart(request: dict, config: dict) -> dict:
-    query = urllib.parse.urlencode({"period1": request["start"], "period2": request["end"],
+    source_end = request["end"]
+    if request.get("adjustment") == CONTRACT and request["interval"] == "1d":
+        source_end = max(source_end, int(time.time()))
+    query = urllib.parse.urlencode({"period1": request["start"], "period2": source_end,
                                    "interval": request["interval"], "events": "div,splits,capitalGains",
+                                   "includeAdjustedClose": "true",
                                    "includePrePost": str(request["include_prepost"]).lower()})
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(request['symbol'], safe='')}?{query}"
     req = urllib.request.Request(url, headers={"User-Agent": "market-observatory/1"})
     with urllib.request.urlopen(req, timeout=config["timeout_seconds"]) as response:
         raw = response.read(config["response_max_bytes"] + 1)
     need(len(raw) <= config["response_max_bytes"], "response exceeds budget")
-    return json.loads(raw)
+    payload = json.loads(raw)
+    if request.get("adjustment") == CONTRACT and isinstance(payload, dict):
+        payload["_acquisition"] = {"source_end": source_end, "wire_sha256": sha256_bytes(raw)}
+    return payload
 
 
 def retry_delay(headers, attempt: int, config: dict, now: float) -> float:
@@ -127,6 +136,8 @@ class Collector:
                      "retry_base_seconds", "retry_max_seconds", "max_windows_per_plan"):
             need(config[name] > 0, f"invalid {name}")
         need(config["publication_lag_seconds"] >= 0, "negative publication lag")
+        need(config.get("price_contract", "provider_unspecified") in ("provider_unspecified", CONTRACT),
+             "unsupported price contract")
         self.fetcher, self.clock = fetcher, clock
         self.gate = threading.Lock()
         self.cooldown, self.blocked = 0.0, False
@@ -148,13 +159,16 @@ class Collector:
         db.execute("""CREATE TABLE IF NOT EXISTS coverage (
             contract TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, state TEXT NOT NULL,
             PRIMARY KEY(contract,start,end,state))""")
+        db.execute("CREATE TABLE IF NOT EXISTS exports (id TEXT NOT NULL, object TEXT NOT NULL, PRIMARY KEY(id,object))")
         return db
 
     def plan(self, rows: list[dict], start: int, end: int, interval: str, revision: str = "initial", *,
              max_new_jobs: int | None = None) -> int:
         step = self.config["window_seconds"][interval]
         need(step > 0 and start < end and start % step == end % step == 0, "bounds must align with UTC windows")
-        need(end <= self.clock() - self.config["publication_lag_seconds"], "window not closed with provider lag")
+        duration = self.config.get("bar_seconds", {}).get(interval, 0)
+        need(end + duration <= self.clock() - self.config["publication_lag_seconds"],
+             "window not closed with provider lag and bar duration")
         need((end - start) // step <= self.config["max_windows_per_plan"], "window budget exceeded")
         need(revision, "revision required")
         need(max_new_jobs is None or type(max_new_jobs) is int and max_new_jobs > 0, "invalid planning budget")
@@ -163,7 +177,7 @@ class Collector:
             for row in rows:
                 contract_value = {"version": 1, "provider": "yahoo", "symbol": row["provider_symbol"],
                                   "interval": interval, "include_prepost": self.config["include_prepost"],
-                                  "adjustment": "provider_unspecified", "revision": revision}
+                                  "adjustment": self.config.get("price_contract", "provider_unspecified"), "revision": revision}
                 contract = canonical_bytes(contract_value).decode()
                 covered = [(r[0], r[1]) for r in db.execute("SELECT start,end FROM coverage WHERE contract=?", (contract,))]
                 for existing in db.execute("""SELECT request FROM jobs WHERE json_extract(request,'$.symbol')=?
@@ -194,6 +208,45 @@ class Collector:
                                    (sha256_bytes(encoded), encoded.decode()))
             return db.total_changes - before
 
+    def plan_recent_revisions(self, rows, start, end, interval):
+        policy = self.config.get("recent_revisions", {}).get(interval)
+        if not policy or start >= end:
+            return 0
+        step = self.config["window_seconds"][interval]
+        lookback, cadence = policy["lookback_seconds"], policy["cadence_seconds"]
+        need(type(lookback) is int and type(cadence) is int and lookback > 0 and cadence > 0
+             and lookback % step == cadence % step == 0, "invalid revision policy")
+        cycle = end // cadence * cadence
+        policy_pin = sha256_bytes(canonical_bytes(policy))[:16]
+        key = f"revision_cycle:{interval}:{policy_pin}"
+        with writer_lock(self.root), closing(self.connect()) as db:
+            previous = db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            if previous and int(previous[0]) >= cycle:
+                return 0
+            history = []
+            for row in db.execute("""SELECT request FROM jobs WHERE state IN ('observed','unavailable','quarantined','failed')
+                AND json_extract(request,'$.interval')=?""", (interval,)):
+                history.append(json.loads(row[0]))
+            for row in db.execute("SELECT contract,end FROM coverage WHERE json_extract(contract,'$.interval')=?", (interval,)):
+                history.append({**json.loads(row[0]), "end": row[1]})
+        limits = {}
+        for contract in history:
+            if (contract["adjustment"] == self.config.get("price_contract", "provider_unspecified")
+                    and contract["include_prepost"] == self.config["include_prepost"]):
+                symbol = contract["symbol"]
+                limits[symbol] = max(limits.get(symbol, 0), contract["end"])
+        added = 0
+        left = max(start, cycle - lookback)
+        for row in rows:
+            right = min(cycle, limits.get(row["provider_symbol"], 0))
+            if left < right:
+                added += self.plan([row], left, right, interval, revision=f"recent-{policy_pin}-{cycle}")
+        # Record an empty first cycle too, so a retry of the same horizon never
+        # creates a new revision just because its initial fetch has now finished.
+        with writer_lock(self.root), closing(self.connect()) as db, db:
+            db.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (key, str(cycle)))
+        return added
+
     def attempt(self, row: dict) -> dict:
         now = self.clock()
         with self.gate:
@@ -202,19 +255,29 @@ class Collector:
         request = json.loads(row["request"])
         try:
             payload = self.fetcher(request, self.config)
+            acquisition = payload.pop("_acquisition", None) if isinstance(payload, dict) else None
+            observed_at = self.clock()
             invalid = False
+            invalid_reason = None
+            prices = None
             try:
                 count = validate_payload(payload, request)
-            except (Refusal, ValueError):
+                if request["adjustment"] == CONTRACT:
+                    need(acquisition is not None, "missing acquisition provenance")
+                    prices = quote_view(payload, request, observed_at, acquisition["source_end"])
+            except (Refusal, ValueError, KeyError, TypeError, IndexError) as exc:
                 count, invalid = 0, True
-            record = {"schema_version": 1, "request": request, "observed_at": self.clock(),
+                invalid_reason = str(exc) if isinstance(exc, Refusal) else "invalid_provider_response"
+            record = {"schema_version": 1, "request": request, "observed_at": observed_at,
                       "classification": "provider_current_non_pit", "coverage": "unverified" if invalid else "observations_only",
                       "rows_in_window": count, "payload": payload}
+            if request["adjustment"] == CONTRACT:
+                record.update(acquisition=acquisition, prices=prices)
             compressed = gzip.compress(canonical_bytes(record), mtime=0)
             digest = sha256_bytes(compressed)
             put_immutable(self.root / "objects" / digest[:2] / digest, compressed)
             if invalid:
-                return {"state": "quarantined", "object": digest, "reason": "invalid_provider_response", "attempted": True}
+                return {"state": "quarantined", "object": digest, "reason": invalid_reason, "attempted": True}
             return {"state": "observed" if count else "unavailable", "object": digest,
                     "reason": None if count else "no_bars_in_window", "attempted": True}
         except urllib.error.HTTPError as exc:
@@ -298,13 +361,7 @@ class Collector:
                 "meta": dict(db.execute("SELECT key,value FROM meta")), "pit_complete": False}
 
     def restore_checkpoint(self, path: Path) -> dict:
-        need(path.is_file() and not path.is_symlink() and path.stat().st_size <= 64 * 1024 * 1024,
-             "invalid checkpoint file")
-        raw = path.read_bytes()
-        value = json.loads(raw)
-        need(value.get("format") == "marketdata-checkpoint-v1" and value.get("pit_complete") is False,
-             "unsupported checkpoint")
-        digest = sha256_bytes(raw)
+        index, digest = read_index(path)
         with writer_lock(self.root), closing(self.connect()) as db, db:
             saved = db.execute("SELECT value FROM meta WHERE key='checkpoint'").fetchone()
             if saved:
@@ -313,35 +370,42 @@ class Collector:
             need(db.execute("SELECT count(*) FROM jobs").fetchone()[0] == 0
                  and db.execute("SELECT count(*) FROM coverage").fetchone()[0] == 0,
                  "checkpoint restoration requires a fresh producer ledger")
-            for group in value["coverage"]:
-                contract = group["contract"]
-                need(set(contract) == {"version", "provider", "symbol", "interval", "include_prepost", "adjustment", "revision"}
-                     and contract["provider"] == "yahoo" and contract["version"] == 1,
-                     "unsupported checkpoint contract")
-                step = self.config["window_seconds"][contract["interval"]]
-                need(group["state"] in ("observed", "unavailable"), "invalid coverage state")
-                for left, right in group["ranges"]:
-                    need(type(left) is int and type(right) is int and left < right
-                         and left % step == right % step == 0, "invalid coverage interval")
-                    db.execute("INSERT INTO coverage VALUES (?,?,?,?)",
-                               (canonical_bytes(contract).decode(), left, right, group["state"]))
-            for row in value["pending"]:
-                request = json.loads(row["request"])
-                need(row["state"] in ("pending", "running", "retry", "blocked", "quarantined", "failed"),
-                     "invalid pending state")
-                need(type(row["attempts"]) is int and row["attempts"] >= 0
-                     and type(row["retry_at"]) in (int, float) and math.isfinite(row["retry_at"]), "invalid retry state")
-                encoded = canonical_bytes(request)
-                need(request["provider"] == "yahoo" and request["interval"] in self.config["window_seconds"]
-                     and request["start"] < request["end"], "invalid pending request")
-                db.execute("INSERT INTO jobs(id,request,state,attempts,retry_at,reason) VALUES (?,?,?,?,?,?)",
-                           (sha256_bytes(encoded), encoded.decode(), "pending" if row["state"] == "running" else row["state"],
-                            row["attempts"], row["retry_at"], row["reason"]))
-            for name in ("cooldown", "blocked"):
-                if name in value["meta"]:
-                    db.execute("INSERT INTO meta VALUES (?,?)", (name, value["meta"][name]))
+            for value in read_values(path, index, self.config):
+                self._restore_checkpoint_rows(db, value)
+            for name, value in index["meta"].items():
+                if name in ("cooldown", "blocked") or name.startswith("revision_cycle:"):
+                    db.execute("INSERT INTO meta VALUES (?,?)", (name, value))
             db.execute("INSERT INTO meta VALUES ('checkpoint',?)", (digest,))
             return self.summary(db)
+
+    def _restore_checkpoint_rows(self, db, value):
+        for group in value["coverage"]:
+            contract = group["contract"]
+            need(set(contract) == {"version", "provider", "symbol", "interval", "include_prepost", "adjustment", "revision"}
+                 and contract["provider"] == "yahoo" and contract["version"] == 1,
+                 "unsupported checkpoint contract")
+            step = self.config["window_seconds"][contract["interval"]]
+            need(group["state"] in ("observed", "unavailable"), "invalid coverage state")
+            for left, right in group["ranges"]:
+                need(type(left) is int and type(right) is int and left < right
+                     and left % step == right % step == 0, "invalid coverage interval")
+                db.execute("INSERT INTO coverage VALUES (?,?,?,?)",
+                           (canonical_bytes(contract).decode(), left, right, group["state"]))
+        for row in value["pending"]:
+            request = json.loads(row["request"])
+            need(row["state"] in ("pending", "running", "retry", "blocked", "quarantined", "failed"),
+                 "invalid pending state")
+            need(type(row["attempts"]) is int and row["attempts"] >= 0
+                 and type(row["retry_at"]) in (int, float) and math.isfinite(row["retry_at"]), "invalid retry state")
+            encoded = canonical_bytes(request)
+            step = self.config["window_seconds"][request["interval"]]
+            need(request["provider"] == "yahoo"
+                 and type(request["start"]) is int and type(request["end"]) is int
+                 and request["start"] % step == request["end"] % step == 0
+                 and request["start"] < request["end"], "invalid pending request")
+            db.execute("INSERT INTO jobs(id,request,state,attempts,retry_at,reason) VALUES (?,?,?,?,?,?)",
+                       (sha256_bytes(encoded), encoded.decode(), "pending" if row["state"] == "running" else row["state"],
+                        row["attempts"], row["retry_at"], row["reason"]))
 
     def import_observations(self, inventory: Path) -> dict:
         """Reuse closed native receipts; other data formats require an explicit adapter."""
@@ -366,7 +430,7 @@ class Collector:
                                      "include_prepost", "adjustment", "revision"}, "unsupported request structure")
                 need(request["version"] == 1 and request["provider"] == "yahoo"
                      and request["interval"] in self.config["window_seconds"]
-                     and request["adjustment"] == "provider_unspecified", "unsupported receipt contract")
+                     and request["adjustment"] in ("provider_unspecified", CONTRACT), "unsupported receipt contract")
                 need(isinstance(request["symbol"], str) and request["symbol"]
                      and not any(c.isspace() or c in "/\\" for c in request["symbol"]), "invalid receipt symbol")
                 need(type(request["include_prepost"]) is bool and isinstance(request["revision"], str)
@@ -379,6 +443,10 @@ class Collector:
                 need(type(record.get("observed_at")) in (int, float)
                      and request["end"] <= record["observed_at"] <= self.clock(), "invalid observation time")
                 count = validate_payload(record["payload"], request)
+                if request["adjustment"] == CONTRACT:
+                    need(record.get("prices") == quote_view(record["payload"], request, record["observed_at"],
+                                                             record["acquisition"]["source_end"]),
+                         "price contract differs on import")
                 need(count > 0 and count == record["rows_in_window"], "receipt does not contain observed bars")
                 encoded = canonical_bytes(request)
                 job_id = sha256_bytes(encoded)
@@ -392,25 +460,45 @@ class Collector:
             return {**self.summary(db), "imported_windows": imported,
                     "source_inventory_sha256": snapshot["source_inventory_sha256"]}
 
-    def export(self, destination: Path, *, include_checkpoint: bool = False) -> dict:
+    def acknowledge_export(self, inventory: Path):
+        snapshot, roots = portable_snapshot(inventory)
+        selected = [item for item in snapshot["files"] if item["path"].startswith("root/_producer/exports/")]
+        with writer_lock(self.root), closing(self.connect()) as db, db:
+            for item in selected:
+                parts = portable_parts(item["path"])
+                value = json.loads(source_path(roots[parts[0]], Path(*parts[1:])).read_bytes())
+                need(value["format"] == "marketdata-export-v1", "invalid export acknowledgement")
+                for row in value["observations"]:
+                    existing = db.execute("SELECT object FROM jobs WHERE id=?", (row["id"],)).fetchone()
+                    need(existing and existing[0] == row["object"], "export acknowledgement differs from producer")
+                    db.execute("INSERT OR IGNORE INTO exports VALUES (?,?)", (row["id"], row["object"]))
+
+    def export(self, destination: Path, *, include_checkpoint: bool = False, only_unexported: bool = False) -> dict:
         destination = destination.absolute()
         need(not destination.exists() and not destination.is_symlink(), "export already exists")
         need(not destination.is_relative_to(self.root) and not self.root.is_relative_to(destination),
              "export and collector state must not overlap")
         with writer_lock(self.root), closing(self.connect()) as db, db:
-            rows = db.execute("SELECT * FROM jobs WHERE state='observed' ORDER BY id").fetchall()
+            need(not only_unexported or include_checkpoint, "delta export requires checkpoint and acknowledgement")
+            rows = db.execute("""SELECT * FROM jobs WHERE state='observed'
+                AND (?=0 OR NOT EXISTS(SELECT 1 FROM exports e WHERE e.id=jobs.id AND e.object=jobs.object))
+                ORDER BY id""", (int(only_unexported),)).fetchall()
             need(rows or include_checkpoint, "no observed windows to export")
             real_directory(destination.parent)
             staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.exporting-", dir=destination.parent))
             try:
                 root = real_directory(staging / "root")
+                checkpoint_files = 0
                 if include_checkpoint:
-                    checkpoint = canonical_bytes(self.checkpoint(db))
-                    need(len(checkpoint) <= 64 * 1024 * 1024, "checkpoint exceeds format bound; partition the producer")
-                    put_immutable(root / "_producer" / "checkpoint.json", checkpoint)
+                    checkpoint_files = write_checkpoint(self.checkpoint(db), root / "_producer" / "checkpoint.json", self.config)
                     for failed in db.execute("SELECT id,object FROM jobs WHERE state='quarantined' AND object IS NOT NULL"):
                         raw = checked_blob(self.root / "objects", failed["object"])
                         put_immutable(root / "_producer" / "quarantine" / f"{failed['id']}.json.gz", raw)
+                if only_unexported:
+                    receipt = canonical_bytes({"format": "marketdata-export-v1",
+                                               "observations": [{"id": r["id"], "object": r["object"]} for r in rows]})
+                    put_immutable(root / "_producer" / "exports" / f"{sha256_bytes(receipt)}.json", receipt)
+                    checkpoint_files += 1
                 batched = include_checkpoint and self.config.get("checkpoint_export_layout") == "interval_jsonl_batches"
                 if batched:
                     for interval in sorted({json.loads(r["request"])["interval"] for r in rows}):
@@ -441,11 +529,13 @@ class Collector:
                     item["path"] = str(destination / Path(item["path"]).relative_to(staging))
                 put_immutable(staging / "inventory.json", canonical_bytes(document))
                 temporary_manifest.unlink()
-                result = {**self.summary(db), "files": len(document["files"]) - int(include_checkpoint),
+                result = {**self.summary(db), "files": len(document["files"]) - checkpoint_files,
                           "observation_requests": len(rows), "layout": "interval_jsonl_batches" if batched else "native_receipts",
                           "inventory": str(destination / "inventory.json")}
                 put_immutable(staging / "collection.json", canonical_bytes(result))
                 publish_directory(staging, destination)
+                if only_unexported:
+                    db.executemany("INSERT OR IGNORE INTO exports VALUES (?,?)", ((r["id"], r["object"]) for r in rows))
                 return result
             except BaseException:
                 shutil.rmtree(staging, ignore_errors=True)
@@ -461,7 +551,7 @@ def main() -> int:
     collect.add_argument("--universe", type=Path, required=True)
     collect.add_argument("--start", required=True)
     collect.add_argument("--end", required=True)
-    collect.add_argument("--interval", choices=("1d", "1m"), required=True)
+    collect.add_argument("--interval", choices=("1d", "1m", "15m", "1h"), required=True)
     collect.add_argument("--revision", default="initial")
     collect.add_argument("--execute", action="store_true")
     exported = commands.add_parser("export")

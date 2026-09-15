@@ -7,6 +7,8 @@ collector:
   plan_jobs_by_interval:
     1d: 75000
     1m: 75000
+    15m: 75000
+    1h: 75000
   timeout_seconds: 30
   response_max_bytes: 33554432
   max_attempts: 5
@@ -15,12 +17,21 @@ collector:
   publication_lag_seconds: 1200
   include_prepost: false
   checkpoint_export_layout: interval_jsonl_batches
+  checkpoint_shard_bytes: 2097152
+  checkpoint_total_bytes: 536870912
   window_seconds:
     1d: 86400
     1m: 3600
+    15m: 3600
+    1h: 3600
+  bar_seconds:
+    15m: 900
+    1h: 3600
   request_windows:
     1d: 168
     1m: 24
+    15m: 24
+    1h: 24
 archive:
   pack_bytes: 8388608
   compression_level: 9

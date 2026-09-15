@@ -68,6 +68,23 @@ class ManualPipelineTests(TemporaryCase):
         self.assertEqual(len(self.calls), 2)
         self.assertFalse(completed["published"])
 
+    def test_15m_and_1h_publish_restore_and_increment_independently(self):
+        options = {"transport": self.transport, "publish": True, "fetcher": self.fetch, "clock": lambda: 999999}
+        first = run_once(self.config, self.root / "one", "first", self.universe, 0, 10800,
+                         ["15m", "1h"], self.key, **options)
+        self.assertEqual(len(self.calls), 4)
+        parent = {"tag": first["tag"], "ready_pin": first["ready_pin"]}
+        second = run_once(self.config, self.root / "two", "second", self.universe, 0, 14400,
+                          ["15m", "1h"], self.key, parent=parent, **options)
+        self.assertEqual(len(self.calls), 6)
+        self.assertEqual({row["interval"] for row in self.calls[-2:]}, {"15m", "1h"})
+        self.assertTrue(all(row["start"] == 7200 for row in self.calls[-2:]))
+        client, ready, _ = self.transport.mount(second["tag"], second["ready_pin"], self.root / "client", self.key)
+        client.restore(ready["catalog_pin"], self.root / "restored", self.root / "cache")
+        for interval in ("15m", "1h"):
+            files = list((self.root / "restored/root" / interval).glob("batch-*.jsonl.gz"))
+            self.assertEqual(sum(len(gzip.decompress(path.read_bytes()).splitlines()) for path in files), 3)
+
     def test_reference_backfill_parent_does_not_claim_bar_coverage(self):
         from cache_common import put_immutable
         archive = copy.copy(self.template)

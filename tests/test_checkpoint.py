@@ -73,3 +73,15 @@ class CheckpointTests(TemporaryCase):
         self.assertEqual(self.collector.plan(self.rows, 0, 10800, "1m", max_new_jobs=2), 2)
         self.assertEqual(self.collector.plan(self.rows, 0, 10800, "1m", max_new_jobs=2), 1)
         self.assertEqual(self.collector.plan(self.rows, 0, 10800, "1m", max_new_jobs=2), 0)
+
+    def test_all_intraday_intervals_remain_independent_after_checkpoint_restore(self):
+        for interval in ("1m", "15m", "1h"):
+            self.collector.plan(self.rows, 0, 3600, interval)
+        self.collector.run()
+        path, value = self.save()
+        self.assertEqual({row["contract"]["interval"] for row in value["coverage"]}, {"1m", "15m", "1h"})
+        fresh = Collector(self.root / "fresh", self.config, clock=lambda: 999999)
+        fresh.restore_checkpoint(path)
+        for interval in ("1m", "15m", "1h"):
+            self.assertEqual(fresh.plan(self.rows, 0, 3600, interval), 0)
+            self.assertEqual(fresh.plan(self.rows, 0, 7200, interval), 1)
