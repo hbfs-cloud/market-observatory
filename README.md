@@ -45,6 +45,9 @@ bornee, collecte, export ferme, preparation et publication optionnelle. Sans
 Utiliser un nouveau repertoire de travail pour chaque nouveau parent. Les trous
 contigus sont regroupes en requetes bornees et les exports producteur en lots
 JSONL compresses par intervalle, sans fichier archive par symbole/heure.
+La date de generation de l'archive est distincte de l'horizon des donnees : un
+rattrapage ancien ne recule pas le catalogue. Cette date est figee dans l'intent
+et conservee lors des reprises, sans retelechargement du lot ferme.
 
 ## Archives
 
@@ -63,6 +66,10 @@ Le checkpoint chiffre suffit a reprendre sur un runner neuf sans tout restaurer.
 Publication, restauration, delta et compaction ont aussi ete verifies sur GitHub.
 Le test reel de compaction conserve le snapshot logique et ne transfere aucun
 nouvel objet a un client deja a jour ; les metadonnees restent telechargees.
+Un producteur neuf a aussi repris le checkpoint et collecte seulement l'heure
+manquante ; relancer le lot publie n'effectue aucun nouvel appel fournisseur.
+La selectivite reste au niveau fichier/pack : un fichier minuscule peut demander
+un pack entier. Augmenter les packs reduit les objets mais amplifie ces lectures.
 L'ancien script de publication non chiffree est desactive.
 
 `backfill_sec.py` exporte des tables existantes en lecture seule vers Parquet/Zstd.

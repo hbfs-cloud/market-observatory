@@ -30,12 +30,23 @@ def run_once(config, work, run_id, universe, since, until, intervals, key_file, 
     work = real_directory(work)
     with writer_lock(work):
         run = real_directory(work / "runs" / run_id)
-        intent = {"format": "marketdata-run-v1", "run_id": run_id, "since": since, "until": until,
+        intent = {"format": "marketdata-run-v2", "run_id": run_id, "since": since, "until": until,
                   "intervals": sorted(set(intervals)), "universe_sha256": sha256_bytes(universe.read_bytes()),
                   "config_sha256": sha256_bytes(canonical_bytes(config)), "parent": parent,
                   "inventories": [{"path": str(p.absolute()), "sha256": sha256_bytes(p.read_bytes())} for p in inventories],
                   "observations": [{"path": str(p.absolute()), "sha256": sha256_bytes(p.read_bytes())} for p in observations]}
-        put_immutable(run / "intent.json", canonical_bytes(intent))
+        intent_path = run / "intent.json"
+        if intent_path.exists():
+            stored = json.loads(intent_path.read_text())
+            need(stored.get("format") in ("marketdata-run-v1", "marketdata-run-v2"), "unsupported run intent")
+            intent["format"] = stored["format"]
+            if intent["format"] == "marketdata-run-v2":
+                intent["archive_as_of"] = stored["archive_as_of"]
+        else:
+            # The archive vintage is not the requested data horizon: a late
+            # backfill must not move publication backwards behind its parent.
+            intent["archive_as_of"] = datetime.fromtimestamp(clock(), timezone.utc).isoformat()
+        put_immutable(intent_path, canonical_bytes(intent))
         index, previous = None, None
         if parent:
             need(transport is not None, "parent requires pinned transport")
@@ -104,7 +115,7 @@ def run_once(config, work, run_id, universe, since, until, intervals, key_file, 
             put_immutable(prepared_path, canonical_bytes(prepared))
         if publish:
             result = transport.publish(archive, prepared["catalog_pin"],
-                                       datetime.fromtimestamp(until, timezone.utc).isoformat(),
+                                       intent.get("archive_as_of", datetime.fromtimestamp(until, timezone.utc).isoformat()),
                                        parent=index)
             put_immutable(run / "published.json", canonical_bytes({k: result[k] for k in ("tag", "ready_pin", "catalog_pin")}))
             return {**prepared, **result, "published": True, "automatic_scheduling": False}

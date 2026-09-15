@@ -37,6 +37,9 @@ class ManualPipelineTests(TemporaryCase):
         first = run_once(self.config, self.root / "one", "first", self.universe, 0, 7200,
                          ["1m"], self.key, **common)
         self.assertEqual(len(self.calls), 2)
+        ready, _ = self.transport.published(first["tag"])
+        self.assertEqual(ready["as_of"], "1970-01-12T13:46:39Z")
+        common["clock"] = lambda: 1000999
         again = run_once(self.config, self.root / "one", "first", self.universe, 0, 7200,
                          ["1m"], self.key, **common)
         self.assertEqual(again["ready_pin"], first["ready_pin"])
