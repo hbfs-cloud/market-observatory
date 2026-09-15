@@ -1,0 +1,13 @@
+schema_version: 1
+automatic_scheduling: false
+repository: hbfs-cloud/marketdata-cache-archive-private
+api_version: '2026-03-10'
+require_immutable_releases: true
+assets_per_release: 900
+max_pages: 10000
+max_attempts: 5
+retry_base_seconds: 5
+retry_max_seconds: 300
+timeout_seconds: 120
+max_asset_bytes: 69206016
+key_file: ~/.mkdata_key

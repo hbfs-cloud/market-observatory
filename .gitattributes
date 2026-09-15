@@ -1,0 +1,2 @@
+# Inventoried reference bytes must survive clone on every platform unchanged.
+universes/** -text

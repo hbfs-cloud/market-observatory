@@ -1,0 +1,69 @@
+schema_version: 1
+automatic_scheduling: false
+archive_pit_qualification: false
+datasets:
+  bars_1m:
+    adapter: incremental_collector
+    status: implemented_manual_not_runner_benchmarked
+    target_cadence_seconds: 3600
+    markets: [US, EU, AP, ETF, FX, crypto, index, futures_reference]
+    provenance: provider_current_non_pit
+    required: [instrument_id, timestamp, observed_at, source, adjustment_basis, currency, volume_unit]
+  bars_1d:
+    adapter: incremental_collector
+    status: implemented_manual_not_runner_benchmarked
+    target_cadence_seconds: 86400
+    provenance: provider_current_non_pit
+    required: [instrument_id, session_date, observed_at, source, adjustment_basis, currency, volume_unit]
+  legacy_bars:
+    adapter: backfill_parquet
+    status: implemented_readonly_backfill
+    target_cadence_seconds: 86400
+    provenance: legacy_adjustment_unknown_non_pit
+    never_satisfies: [raw_bars, bars_1m, historical_pit]
+  sec:
+    adapter: backfill_sec
+    status: implemented_existing_store_export_not_direct_edgar_harvester
+    target_cadence_seconds: 3600
+    provenance: legacy_sec_candidate_non_certified
+    required: [accession, accepted_at, available_at, observed_at, parser_version, universe_version, ingest_evidence]
+  stockanalysis:
+    adapter: build_universe_from_stockanalysis
+    status: local_frozen_listings_only_not_full_site_harvester
+    target_cadence_seconds: 86400
+    required: [source_document_sha256, observed_at, currency, financial_period, publication_time, revision]
+  corporate_actions:
+    adapter: embedded_chart_events
+    status: raw_events_retained_normalized_pit_adapter_required
+    target_cadence_seconds: 86400
+    required: [instrument_id, action_id, announcement_at, effective_at, available_at, observed_at, revision, source_document_sha256]
+  security_master:
+    status: source_adapter_required
+    target_cadence_seconds: 86400
+    required: [instrument_id, listing_id, symbol, mic, currency, valid_from, valid_to, known_from, known_to, delisting_event]
+  index_membership:
+    status: historical_provider_and_rights_required
+    target_cadence_seconds: 86400
+    indices: [SP500, SP400, SP600, NASDAQ100, RUSSELL1000, RUSSELL2000, DJIA, STOXX600, EUROSTOXX50, FTSE100, CAC40, DAX, NIKKEI225, TOPIX, HANGSENG, ASX200]
+    required: [index_id, instrument_id, announced_at, effective_from, effective_to, known_from, known_to, weight, methodology_version, source_document_sha256]
+    reject_as_historical_pit: [current_membership_backdated, etf_holdings_as_index_membership]
+  calendars:
+    status: source_adapter_required
+    target_cadence_seconds: 86400
+    required: [mic, timezone, session_date, open_at, close_at, holiday_type, announced_at, observed_at, revision]
+  earnings:
+    status: source_adapter_required
+    target_cadence_seconds: 3600
+    required: [instrument_id, fiscal_period, scheduled_at, actual_publication_at, available_at, observed_at, revision]
+  options:
+    status: licensed_history_and_source_adapter_required
+    target_cadence_seconds: 3600
+    required: [underlying_id, contract_id, expiry, strike, multiplier, deliverable, quote_at, bid, ask, open_interest_as_of, observed_at]
+  classifications_themes:
+    status: historical_reference_adapter_required
+    target_cadence_seconds: 86400
+    required: [instrument_id, taxonomy, taxonomy_version, classification, effective_from, effective_to, known_from, known_to, source_document_sha256]
+  bara_inputs:
+    status: blocked_on_qualified_raw_prices_and_references
+    target_cadence_seconds: 86400
+    required: [snapshot_pin, model_version, estimation_cutoff, exposures, factor_returns, specific_risk, covariance, universe_eligibility]

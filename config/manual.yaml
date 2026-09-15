@@ -1,0 +1,27 @@
+schema_version: 1
+automatic_scheduling: false
+collector:
+  concurrency: 30
+  max_jobs_per_run: 150000
+  max_windows_per_plan: 168
+  plan_jobs_by_interval:
+    1d: 75000
+    1m: 75000
+  timeout_seconds: 30
+  response_max_bytes: 33554432
+  max_attempts: 5
+  retry_base_seconds: 30
+  retry_max_seconds: 3600
+  publication_lag_seconds: 1200
+  include_prepost: false
+  checkpoint_export_layout: interval_jsonl_batches
+  window_seconds:
+    1d: 86400
+    1m: 3600
+  request_windows:
+    1d: 168
+    1m: 24
+archive:
+  pack_bytes: 8388608
+  compression_level: 9
+  key_file: ~/.mkdata_key

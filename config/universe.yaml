@@ -1,0 +1,56 @@
+schema_version: 1
+# Existing marketdata-mcp mappings; unresolved venues remain explicit exclusions.
+exchange_suffixes:
+  amex: ''
+  arca: ''
+  nasdaq: ''
+  nyse: ''
+  aim: .L
+  aqu: .L
+  ams: .AS
+  asx: .AX
+  bit: .MI
+  bme: .MC
+  bom: .BO
+  bru: .BR
+  bvmf: .SA
+  cph: .CO
+  cse: .CN
+  ebr: .BR
+  eli: .LS
+  els: .LS
+  epa: .PA
+  etr: .DE
+  fra: .F
+  hel: .HE
+  hkg: .HK
+  jpx: .T
+  jse: .JO
+  kosdaq: .KQ
+  krx: .KS
+  lon: .L
+  moex: .ME
+  neo: .NE
+  nse: .NS
+  nze: .NZ
+  osl: .OL
+  ses: .SI
+  sgx: .SI
+  sha: .SS
+  she: .SZ
+  sto: .ST
+  swx: .SW
+  six: .SW
+  tpe: .TW
+  tpex: .TWO
+  tsx: .TO
+  tsxv: .V
+  tyo: .T
+  vie: .VI
+  wse: .WA
+references:
+  fx: [EURUSD=X, EURGBP=X, EURCHF=X, EURJPY=X, EURCNY=X, EURCAD=X, EURHKD=X, EURPLN=X, EURBRL=X, EURINR=X, USDJPY=X]
+  crypto: [BTC-USD, ETH-USD, SOL-USD, XRP-USD, ADA-USD, DOGE-USD, AVAX-USD, LINK-USD, LTC-USD]
+  index: ['^GSPC', '^NDX', '^DJI', '^RUT', '^VIX', '^STOXX50E', '^N225']
+  futures_reference: [GC=F, SI=F, CL=F]
+  etf: [SPY, QQQ, GLD, SLV, USO]

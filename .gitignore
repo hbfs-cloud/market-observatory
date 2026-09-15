@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+out/
+state/
+*.age
+*.sqlite*
+.env
+.env.*
+!.env.example
