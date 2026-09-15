@@ -52,7 +52,10 @@ def run_once(config, work, run_id, universe, since, until, intervals, key_file, 
             fresh = fresh and db.execute("SELECT count(*) FROM coverage").fetchone()[0] == 0
             bound = db.execute("SELECT value FROM meta WHERE key='archive_parent'").fetchone()
             need(not bound or bound[0] == previous, "producer ledger belongs to another parent; use a fresh work directory")
-        if parent and fresh:
+        # A reference-only backfill has no acquisition ledger. It must not claim
+        # raw-bar coverage, but it is a valid parent for the first collection.
+        has_checkpoint = parent and "root/_producer/checkpoint.json" in archive.catalog(previous)["files"]
+        if has_checkpoint and fresh:
             checkpoint_root = run / "parent-checkpoint"
             if checkpoint_root.exists():
                 from vendor.immutable_cache_release import verify_directory
@@ -97,6 +100,7 @@ def run_once(config, work, run_id, universe, since, until, intervals, key_file, 
                 prepared = archive.prepare(inventory, parent=previous)
                 previous = prepared["catalog_pin"]
             prepared.update(collection=status, run_id=run_id)
+            prepared["parent_checkpoint_present"] = bool(has_checkpoint)
             put_immutable(prepared_path, canonical_bytes(prepared))
         if publish:
             result = transport.publish(archive, prepared["catalog_pin"],

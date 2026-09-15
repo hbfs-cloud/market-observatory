@@ -64,3 +64,19 @@ class ManualPipelineTests(TemporaryCase):
         completed = run_once(*args, **options)
         self.assertEqual(len(self.calls), 2)
         self.assertFalse(completed["published"])
+
+    def test_reference_backfill_parent_does_not_claim_bar_coverage(self):
+        from cache_common import put_immutable
+        archive = copy.copy(self.template)
+        archive.root = self.root / "legacy-archive"
+        put_immutable(archive.root / "keyring.age", (self.template.root / "keyring.age").read_bytes())
+        self.number = 0
+        inventory = fixtures.ArchiveTests.inventory(self, {"reference.json": b"{}"})
+        prepared = archive.prepare(inventory)
+        first = self.transport.publish(archive, prepared["catalog_pin"], "1970-01-01T00:00:00Z")
+        second = run_once(self.config, self.root / "collector", "initial", self.universe, 0, 7200,
+                          ["1m"], self.key, parent={"tag": first["tag"], "ready_pin": first["ready_pin"]},
+                          transport=self.transport, publish=True, fetcher=self.fetch, clock=lambda: 999999)
+        self.assertFalse(second["parent_checkpoint_present"])
+        self.assertEqual(len(self.calls), 2)
+        self.assertTrue(second["published"])

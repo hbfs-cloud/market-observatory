@@ -135,6 +135,32 @@ class CollectorTests(TemporaryCase):
         with self.assertRaises(Refusal):
             self.collector.export(self.root / "empty")
         self.assertFalse((self.root / "empty").exists())
+        self.collector.export(self.root / "evidence", include_checkpoint=True)
+        files = list((self.root / "evidence/root/_producer/quarantine").glob("*.json.gz"))
+        self.assertEqual(len(files), 1)
+        import gzip
+        record = json.loads(gzip.decompress(files[0].read_bytes()))
+        self.assertEqual(record["coverage"], "unverified")
+        self.assertEqual(record["payload"]["chart"]["error"]["code"], "Not Found")
+
+    def test_null_buckets_are_missing_not_bars_or_corruption(self):
+        request = {"symbol": "AAA", "interval": "1m", "start": 0, "end": 3600}
+        response = payload(request)
+        data = response["chart"]["result"][0]
+        data["timestamp"].append(60)
+        for values in data["indicators"]["quote"][0].values():
+            values.append(None)
+        self.assertEqual(validate_payload(response, request), 1)
+        data["indicators"]["quote"][0]["close"][1] = 10
+        with self.assertRaises(Refusal):
+            validate_payload(response, request)
+
+    def test_only_null_buckets_cannot_claim_observed_bars(self):
+        request = {"symbol": "AAA", "interval": "1m", "start": 0, "end": 3600}
+        response = payload(request)
+        for values in response["chart"]["result"][0]["indicators"]["quote"][0].values():
+            values[0] = None
+        self.assertEqual(validate_payload(response, request), 0)
 
     def test_empty_window_is_not_complete(self):
         self.collector.fetcher = lambda r, c: payload(r, empty=True)

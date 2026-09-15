@@ -76,11 +76,15 @@ def validate_payload(payload: dict, request: dict) -> int:
         for i, t in enumerate(timestamps):
             if not request["start"] <= t < request["end"]:
                 continue
+            need(request["interval"] != "1m" or t % 60 == 0, "unaligned minute")
             values = [quote[k][i] for k in ("open", "high", "low", "close", "volume")]
+            # Empty provider buckets are missing observations, never synthetic
+            # zero-volume bars. A partially populated bucket is still invalid.
+            if all(v is None for v in values):
+                continue
             need(all(type(v) in (int, float) and math.isfinite(v) for v in values), "invalid OHLCV")
             op, high, low, close, volume = values
             need(0 < low <= min(op, close) <= max(op, close) <= high and volume >= 0, "impossible OHLCV")
-            need(request["interval"] != "1m" or t % 60 == 0, "unaligned minute")
             count += 1
         return count
     except (KeyError, IndexError, TypeError, AttributeError) as exc:
@@ -198,13 +202,19 @@ class Collector:
         request = json.loads(row["request"])
         try:
             payload = self.fetcher(request, self.config)
-            count = validate_payload(payload, request)
+            invalid = False
+            try:
+                count = validate_payload(payload, request)
+            except (Refusal, ValueError):
+                count, invalid = 0, True
             record = {"schema_version": 1, "request": request, "observed_at": self.clock(),
-                      "classification": "provider_current_non_pit", "coverage": "observations_only",
+                      "classification": "provider_current_non_pit", "coverage": "unverified" if invalid else "observations_only",
                       "rows_in_window": count, "payload": payload}
             compressed = gzip.compress(canonical_bytes(record), mtime=0)
             digest = sha256_bytes(compressed)
             put_immutable(self.root / "objects" / digest[:2] / digest, compressed)
+            if invalid:
+                return {"state": "quarantined", "object": digest, "reason": "invalid_provider_response", "attempted": True}
             return {"state": "observed" if count else "unavailable", "object": digest,
                     "reason": None if count else "no_bars_in_window", "attempted": True}
         except urllib.error.HTTPError as exc:
@@ -221,7 +231,7 @@ class Collector:
                 return {"state": "retry", "retry_at": now + delay, "reason": f"http_{exc.code}", "attempted": True}
             return {"state": "unavailable" if exc.code == 404 else "quarantined",
                     "reason": f"http_{exc.code}", "attempted": True}
-        except (Refusal, ValueError):
+        except ValueError:
             return {"state": "quarantined", "reason": "invalid_provider_response", "attempted": True}
         except (urllib.error.URLError, TimeoutError, ConnectionError):
             delay = retry_delay(None, row["attempts"] + 1, self.config, now)
@@ -398,6 +408,9 @@ class Collector:
                     checkpoint = canonical_bytes(self.checkpoint(db))
                     need(len(checkpoint) <= 64 * 1024 * 1024, "checkpoint exceeds format bound; partition the producer")
                     put_immutable(root / "_producer" / "checkpoint.json", checkpoint)
+                    for failed in db.execute("SELECT id,object FROM jobs WHERE state='quarantined' AND object IS NOT NULL"):
+                        raw = checked_blob(self.root / "objects", failed["object"])
+                        put_immutable(root / "_producer" / "quarantine" / f"{failed['id']}.json.gz", raw)
                 batched = include_checkpoint and self.config.get("checkpoint_export_layout") == "interval_jsonl_batches"
                 if batched:
                     for interval in sorted({json.loads(r["request"])["interval"] for r in rows}):

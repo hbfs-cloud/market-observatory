@@ -2,8 +2,8 @@
 
 Collecte mutualisee de donnees de marche et archives incrementales chiffrees.
 Aucune barre ni aucun secret dans Git ; seuls les referentiels de symboles y figurent.
-Etat : validation locale, pas de service
-deploye. Le workflow est exclusivement manuel et execute des tests hors reseau.
+Etat : code publie, transport prive teste sur de vraies releases immuables.
+Le workflow est exclusivement manuel et execute des tests hors reseau.
 Aucun cron, aucune collecte Actions, aucune publication automatique.
 
 ## Validation
@@ -60,7 +60,9 @@ Elle n'est ni modifiee ni distribuee par ce projet. `release_transport.py` fourn
 Le depot destinataire doit etre prive, initialise et ses releases immuables activees.
 Les objets sont publies avant READY ; les clients ignorent les lots incomplets.
 Le checkpoint chiffre suffit a reprendre sur un runner neuf sans tout restaurer.
-Ces chemins passent les tests offline ; leur publication GitHub reelle reste a valider.
+Publication, restauration, delta et compaction ont aussi ete verifies sur GitHub.
+Le test reel de compaction conserve le snapshot logique et ne transfere aucun
+nouvel objet a un client deja a jour ; les metadonnees restent telechargees.
 L'ancien script de publication non chiffree est desactive.
 
 `backfill_sec.py` exporte des tables existantes en lecture seule vers Parquet/Zstd.
@@ -74,3 +76,16 @@ compositions d'indices, corporate actions et revisions ont leurs propres contrat
 corrections et retraits. Il ne fabrique pas les dates manquantes.
 `config/datasets.yaml` distingue les adaptateurs presents des collecteurs et
 historiques encore requis : leur inventaire ne signifie pas leur acquisition.
+
+`normalize_pit_inputs.py` transforme les recus de barres epingles en observations
+de corporate actions et les CSV d'indices en snapshots ponctuels. Le document
+source est conserve par SHA. Une date effective ne devient jamais une date
+d'annonce : la connaissance reste bornee par l'observation locale. Un snapshot
+mensuel ne remplit pas les jours manquants. `--bootstrap` exige un premier lot
+explicite ; ensuite `--history JSONL SHA256` fournit chaque delta precedent epingle
+pour poursuivre les revisions sans reemettre l'historique.
+
+Les buckets de prix entierement nuls restent des absences, sans barre synthetique.
+Les reponses partielles/incoherentes sont mises en quarantaine et conservees dans
+les exports avec checkpoint. La qualification calendaires, sessions et couverture
+PIT complete reste independante de la reussite du transport.

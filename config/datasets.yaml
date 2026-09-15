@@ -33,8 +33,8 @@ datasets:
     target_cadence_seconds: 86400
     required: [source_document_sha256, observed_at, currency, financial_period, publication_time, revision]
   corporate_actions:
-    adapter: embedded_chart_events
-    status: raw_events_retained_normalized_pit_adapter_required
+    adapter: normalize_pit_inputs_chart_actions
+    status: observed_event_normalization_not_historical_announcement_certification
     target_cadence_seconds: 86400
     required: [instrument_id, action_id, announcement_at, effective_at, available_at, observed_at, revision, source_document_sha256]
   security_master:
@@ -42,7 +42,8 @@ datasets:
     target_cadence_seconds: 86400
     required: [instrument_id, listing_id, symbol, mic, currency, valid_from, valid_to, known_from, known_to, delisting_event]
   index_membership:
-    status: historical_provider_and_rights_required
+    adapter: normalize_pit_inputs_index_snapshot
+    status: sparse_snapshot_normalization_historical_provider_and_rights_required
     target_cadence_seconds: 86400
     indices: [SP500, SP400, SP600, NASDAQ100, RUSSELL1000, RUSSELL2000, DJIA, STOXX600, EUROSTOXX50, FTSE100, CAC40, DAX, NIKKEI225, TOPIX, HANGSENG, ASX200]
     required: [index_id, instrument_id, announced_at, effective_from, effective_to, known_from, known_to, weight, methodology_version, source_document_sha256]

@@ -1,0 +1,4 @@
+schema_version: 1
+max_input_bytes: 536870912
+max_line_bytes: 33554432
+max_records: 1000000
