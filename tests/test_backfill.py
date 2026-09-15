@@ -61,6 +61,49 @@ class BackfillTests(TemporaryCase):
         with self.assertRaises(ValueError):
             export(self.db, "credentials", "2026-09-11", "2026-09-12", 1, 5, io.BytesIO())
 
+    def test_insiders_select_reported_at_and_preserve_null_filing_date(self):
+        for table in ("insider_trades", "insider_ownerships"):
+            with self.subTest(table=table):
+                with closing(sqlite3.connect(self.db)) as db, db:
+                    db.execute(f'CREATE TABLE "{table}"(id INTEGER PRIMARY KEY, filing_date TEXT, reported_at TEXT)')
+                    db.executemany(f'INSERT INTO "{table}" VALUES (?,?,?)', [
+                        (1, None, "2026-09-11T12:00:00Z"),
+                        (2, "2026-09-11", "2026-09-12T12:00:00Z")])
+                value = io.BytesIO()
+                export(self.db, table, "2026-09-11", "2026-09-12", 100, 5, value)
+                path = self.root / f"{table}.gz"
+                path.write_bytes(value.getvalue())
+                expected = dict(self.expected, table=table)
+                report = convert_stream(path, self.root / table, self.policy, expected)
+                self.assertEqual(report["rows"], 1)
+                self.assertEqual(report["selection_date_column"], "reported_at")
+                row = pq.read_table(self.root / table / "part-00000.parquet").to_pylist()[0]
+                self.assertIsNone(row["filing_date"])
+                self.assertEqual(json.loads(row["record_json"])["reported_at"], "2026-09-11T12:00:00Z")
+
+    def test_13f_export_preserves_units_and_refuses_changed_selection_column(self):
+        for table in ("institutional13f_filings", "institutional13f_holdings", "institutional13f_positions"):
+            with self.subTest(table=table):
+                with closing(sqlite3.connect(self.db)) as db, db:
+                    db.execute(f'CREATE TABLE "{table}"(id INTEGER PRIMARY KEY, filing_date TEXT, value_multiplier INTEGER)')
+                    db.execute(f'INSERT INTO "{table}" VALUES (1,?,1000)', ("2026-09-11",))
+                value = io.BytesIO()
+                export(self.db, table, "2026-09-11", "2026-09-12", 100, 5, value)
+                path = self.root / f"{table}.gz"
+                path.write_bytes(value.getvalue())
+                expected = dict(self.expected, table=table)
+                report = convert_stream(path, self.root / table, self.policy, expected)
+                self.assertEqual(report["rows"], 1)
+                row = pq.read_table(self.root / table / "part-00000.parquet").to_pylist()[0]
+                self.assertEqual(json.loads(row["record_json"])["value_multiplier"], 1000)
+                lines = gzip.decompress(value.getvalue()).splitlines(keepends=True)
+                header = json.loads(lines[0])
+                header["header"]["selection_date_column"] = "reported_at"
+                lines[0] = (json.dumps(header) + "\n").encode()
+                path.write_bytes(gzip.compress(b"".join(lines)))
+                with self.assertRaises(Refusal):
+                    convert_stream(path, self.root / f"invalid-{table}", self.policy, expected)
+
     def test_parquet_transfer_verifies_bytes_before_atomic_publication(self):
         source = self.root / "source"
         source.mkdir()

@@ -18,7 +18,7 @@ import pyarrow.parquet as pq
 import yaml
 
 from cache_common import publish_directory, put_immutable, real_directory
-from sec_readonly_stream import TABLES
+from sec_readonly_stream import DATE_COLUMNS, TABLES
 from vendor.immutable_cache_release import canonical_bytes, inventory_from_roots, need, Refusal, sha256_bytes
 
 
@@ -46,6 +46,9 @@ def convert_stream(source, destination, policy, expected):
         need(header["format"] == "marketdata-sec-stream-v1" and header["pit_complete"] is False
              and header["read_consistent"] is True, "unsupported SEC export")
         need(all(header[k] == expected[k] for k in ("table", "start", "end")), "export selection differs")
+        selection_column = header.get("selection_date_column", "filing_date")
+        need(header["table"] in TABLES and selection_column == DATE_COLUMNS.get(header["table"], "filing_date"),
+             "unexpected SEC selection date column")
         previous_id = -1
         while True:
             raw = line()
@@ -59,7 +62,8 @@ def convert_stream(source, destination, policy, expected):
             count += 1
             need(count <= policy["max_rows"] and type(row["id"]) is int and row["id"] > previous_id,
                  "SEC row budget/order differs")
-            need(expected["start"] <= row["filing_date"] < expected["end"], "SEC filing outside selection")
+            need(isinstance(row.get(selection_column), str)
+                 and expected["start"] <= row[selection_column] < expected["end"], "SEC row outside selection")
             previous_id = row["id"]
             digest.update(raw)
             batch.append({"row_id": row["id"], "filing_date": row["filing_date"],

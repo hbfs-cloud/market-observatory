@@ -1,0 +1,30 @@
+schema_version: 1
+automatic_scheduling: false
+ssh:
+  host: reader@export-host.example.invalid
+  identity_file: ~/.ssh/read_only_export
+  connect_timeout_seconds: 10
+sec:
+  database: /path/to/sec.db
+  tables:
+    - sec_ingest_days
+    - sec_live_filings
+    - sec_filing_events
+    - insider_trades
+    - insider_ownerships
+    - institutional13f_filings
+    - institutional13f_holdings
+    - institutional13f_positions
+  max_rows: 100000
+  max_seconds: 60
+  max_compressed_bytes: 268435456
+  max_line_bytes: 4194304
+  rows_per_partition: 10000
+  compression_level: 9
+parquet:
+  root: /path/to/closed-dated-export
+  dataset_id: legacy-dated-export
+  max_files: 20000
+  max_bytes: 2147483648
+  max_seconds: 120
+  transfer_timeout_seconds: 1800

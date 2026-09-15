@@ -73,6 +73,12 @@ un pack entier. Augmenter les packs reduit les objets mais amplifie ces lectures
 L'ancien script de publication non chiffree est desactive.
 
 `backfill_sec.py` exporte des tables existantes en lecture seule vers Parquet/Zstd.
+Les huit tables SEC autorisees et les budgets figurent dans
+`config/backfill.example.yaml`. Les transactions/detentions d'inities sont
+selectionnees par `reported_at` ; les six autres tables par `filing_date`.
+Les champs originaux, y compris les dates nulles et unites13F, sont conserves.
+Chaque table est lue dans sa propre transaction coherente, pas dans un snapshot
+global simultane. Les lots sont bornes et ne certifient pas la couverture PIT.
 `backfill_parquet.py` reutilise des exports dates via rsync et controle leurs hashes.
 Ni base active, ni WAL, ni modification de permissions du serveur.
 

@@ -24,6 +24,11 @@ datasets:
   sec:
     adapter: backfill_sec
     status: implemented_existing_store_export_not_direct_edgar_harvester
+    tables: [sec_ingest_days, sec_live_filings, sec_filing_events, insider_trades, insider_ownerships, institutional13f_filings, institutional13f_holdings, institutional13f_positions]
+    selection_basis:
+      insider_trades: reported_at
+      insider_ownerships: reported_at
+      other_tables: filing_date
     target_cadence_seconds: 3600
     provenance: legacy_sec_candidate_non_certified
     required: [accession, accepted_at, available_at, observed_at, parser_version, universe_version, ingest_evidence]
