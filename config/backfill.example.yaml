@@ -21,6 +21,7 @@ sec:
   max_line_bytes: 4194304
   rows_per_partition: 10000
   compression_level: 9
+  transport_compression_level: 1
 parquet:
   root: /path/to/closed-dated-export
   dataset_id: legacy-dated-export

@@ -91,7 +91,8 @@ def backfill(config, start, end, destination):
             need(table in TABLES, "SEC table not allowlisted")
             command = ["python3", "-", "--database", policy["database"], "--table", table,
                        "--start", start, "--end", end, "--max-rows", str(policy["max_rows"]),
-                       "--max-seconds", str(policy["max_seconds"])]
+                       "--max-seconds", str(policy["max_seconds"]),
+                       "--compression-level", str(policy.get("transport_compression_level", 1))]
             args = ["ssh", "-T", "-i", str(Path(ssh["identity_file"]).expanduser()), "-o", "BatchMode=yes",
                     "-o", f"ConnectTimeout={ssh['connect_timeout_seconds']}", ssh["host"], shlex.join(command)]
             source = stage / f"{table}.jsonl.gz"
@@ -104,6 +105,9 @@ def backfill(config, start, end, destination):
                                         timeout=policy["max_seconds"] + ssh["connect_timeout_seconds"] + 30, preexec_fn=limits)
                 output.flush()
                 os.fsync(output.fileno())
+            if result.returncode != 0 and any(marker in result.stderr for marker in
+                    (b"export budget exceeded", b"sqlite3.OperationalError: interrupted")):
+                raise Refusal("SEC export exceeded its row/time budget; narrow the date interval")
             need(result.returncode == 0 and source.stat().st_size <= policy["max_compressed_bytes"],
                  "read-only SEC export failed or exceeded budget; remote stderr suppressed")
             report = convert_stream(source, stage / "root" / "sec" / table / f"{start}_{end}", policy,

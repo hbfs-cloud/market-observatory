@@ -20,9 +20,11 @@ def encoded(value):
     return (json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode()
 
 
-def export(database, table, start, end, max_rows, max_seconds, output):
+def export(database, table, start, end, max_rows, max_seconds, output, *, compression_level=1):
     if table not in TABLES or date.fromisoformat(start) >= date.fromisoformat(end):
         raise ValueError("invalid SEC export selection")
+    if type(compression_level) is not int or not 0 <= compression_level <= 9:
+        raise ValueError("invalid SEC transport compression level")
     selection_column = DATE_COLUMNS.get(table, "filing_date")
     started = time.monotonic()
     db = sqlite3.connect(Path(database).absolute().as_uri() + "?mode=ro", uri=True, timeout=5)
@@ -38,7 +40,7 @@ def export(database, table, start, end, max_rows, max_seconds, output):
                   "columns": columns, "exported_at": datetime.now(timezone.utc).isoformat(),
                   "selection_date_column": selection_column,
                   "read_consistent": True, "pit_complete": False}
-        with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as archive:
+        with gzip.GzipFile(fileobj=output, mode="wb", mtime=0, compresslevel=compression_level) as archive:
             archive.write(encoded({"header": header}))
             digest, count = hashlib.sha256(), 0
             query = f'SELECT * FROM "{table}" WHERE "{selection_column}" >= ? AND "{selection_column}" < ? ORDER BY id LIMIT ?'
@@ -63,8 +65,10 @@ def main():
     parser.add_argument("--end", required=True)
     parser.add_argument("--max-rows", required=True, type=int)
     parser.add_argument("--max-seconds", required=True, type=int)
+    parser.add_argument("--compression-level", type=int, default=1)
     args = parser.parse_args()
-    export(args.database, args.table, args.start, args.end, args.max_rows, args.max_seconds, sys.stdout.buffer)
+    export(args.database, args.table, args.start, args.end, args.max_rows, args.max_seconds,
+           sys.stdout.buffer, compression_level=args.compression_level)
 
 
 if __name__ == "__main__":

@@ -61,6 +61,18 @@ class BackfillTests(TemporaryCase):
         with self.assertRaises(ValueError):
             export(self.db, "credentials", "2026-09-11", "2026-09-12", 1, 5, io.BytesIO())
 
+    def test_transport_compression_does_not_change_rows(self):
+        rows = []
+        for level in (1, 9):
+            value = io.BytesIO()
+            export(self.db, "sec_filing_events", "2026-09-11", "2026-09-12", 100, 5,
+                   value, compression_level=level)
+            rows.append(gzip.decompress(value.getvalue()).splitlines()[1:])
+        self.assertEqual(rows[0], rows[1])
+        with self.assertRaises(ValueError):
+            export(self.db, "sec_filing_events", "2026-09-11", "2026-09-12", 100, 5,
+                   io.BytesIO(), compression_level=10)
+
     def test_insiders_select_reported_at_and_preserve_null_filing_date(self):
         for table in ("insider_trades", "insider_ownerships"):
             with self.subTest(table=table):
